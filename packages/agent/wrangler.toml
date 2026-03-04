@@ -13,19 +13,34 @@ database_id = "8731667b-ecc3-47e6-bbb0-83f126c60f67"
 
 [durable_objects]
 bindings = [
-  { name = "STATUS_AGENT", class_name = "StatusAgent" }
+  { name = "STATUS_AGENT", class_name = "StatusAgent" },
+  { name = "INCIDENT_REPORT_AGENT", class_name = "IncidentReportAgent" },
+  { name = "COMMUNICATION_AGENT", class_name = "CommunicationAgent" }
 ]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["StatusAgent"]
 
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["IncidentReportAgent", "CommunicationAgent"]
+
 [vars]
 TARGET_API_URL = "https://status-agent-target-api.santgutz2000.workers.dev"
 CF_ACCOUNT_ID = "75e9c0f2f8195fc7acfc424a3bee313e"
 TARGET_WORKER_NAME = "status-agent-target-api"
+GITHUB_OWNER = ""
+GITHUB_REPO = ""
 
-# CLOUDFLARE_API_TOKEN must be set via: npx wrangler secret put CLOUDFLARE_API_TOKEN
+# Secrets (set via wrangler secret put):
+# CLOUDFLARE_API_TOKEN
+# SLACK_WEBHOOK_URL
+# DISCORD_WEBHOOK_URL
+# RESEND_API_KEY
+# RESEND_FROM_EMAIL (e.g. "StatusAgent <you@yourdomain.com>" or "onboarding@resend.dev")
+# NOTIFICATION_EMAILS (comma-separated recipient emails)
+# GITHUB_TOKEN
 
 [observability]
 enabled = true

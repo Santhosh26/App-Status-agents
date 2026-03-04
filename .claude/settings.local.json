@@ -12,7 +12,8 @@
       "Bash(npm run:*)",
       "Bash(timeout 15 npx wrangler:*)",
       "Bash(rm:*)",
-      "Bash(npx wrangler:*)"
+      "Bash(npx wrangler:*)",
+      "Bash(xargs:*)"
     ]
   }
 }

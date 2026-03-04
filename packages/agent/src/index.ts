@@ -2,8 +2,10 @@ import { Hono } from 'hono';
 import { routeAgentRequest, getAgentByName } from 'agents';
 import type { Env } from './types';
 
-// Re-export the StatusAgent Durable Object
+// Re-export Durable Object classes
 export { StatusAgent } from './agent/status-agent';
+export { IncidentReportAgent } from './agent/incident-report-agent';
+export { CommunicationAgent } from './agent/communication-agent';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -84,6 +86,59 @@ app.post('/api/deploy-bad', async (c) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const stub = await getAgentByName(c.env.STATUS_AGENT as any, 'default');
   return stub.fetch(new Request('http://agent/api/deploy-bad', { method: 'POST' }));
+});
+
+// API: Get post-mortem report for an incident
+app.get('/api/reports/:incidentId', async (c) => {
+  const incidentId = c.req.param('incidentId');
+  const report = await c.env.DB.prepare(
+    'SELECT * FROM incident_reports WHERE incident_id = ?'
+  ).bind(incidentId).first();
+
+  if (!report) return c.json({ error: 'No report found for this incident' }, 404);
+
+  return c.json({
+    report: {
+      ...report,
+      timeline: report.timeline ? JSON.parse(report.timeline as string) : [],
+      action_items: report.action_items ? JSON.parse(report.action_items as string) : [],
+    },
+  });
+});
+
+// API: Notification delivery log
+app.get('/api/notifications', async (c) => {
+  const rows = await c.env.DB.prepare(
+    'SELECT * FROM notification_log ORDER BY sent_at DESC LIMIT 100'
+  ).all();
+  return c.json({ notifications: rows.results });
+});
+
+// API: List notification channels — proxy to CommunicationAgent DO
+app.get('/api/notifications/channels', async (c) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stub = await getAgentByName(c.env.COMMUNICATION_AGENT as any, 'default');
+  return stub.fetch(new Request('http://agent/channels'));
+});
+
+// API: Add notification channel — proxy to CommunicationAgent DO
+app.post('/api/notifications/channels', async (c) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stub = await getAgentByName(c.env.COMMUNICATION_AGENT as any, 'default');
+  return stub.fetch(new Request('http://agent/channels', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(await c.req.json()),
+  }));
+});
+
+// API: GitHub commit correlations for a deployment version
+app.get('/api/github/commits/:versionId', async (c) => {
+  const versionId = c.req.param('versionId');
+  const rows = await c.env.DB.prepare(
+    'SELECT * FROM deployment_commits WHERE version_id = ? ORDER BY commit_date DESC'
+  ).bind(versionId).all();
+  return c.json({ commits: rows.results });
 });
 
 // Default export — handle agent WebSocket routing first, then fall back to Hono

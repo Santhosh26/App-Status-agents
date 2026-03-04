@@ -51,6 +51,12 @@ export const dashboardHtml = `<!DOCTYPE html>
     .event-insight { border-left-color: #3fb950; }
     .event-error { border-left-color: #f85149; background: #1a0a0a; }
     .event-init { border-left-color: #484f58; }
+    .event-report_step { border-left-color: #79c0ff; background: #0d1d30; }
+    .event-report_complete { border-left-color: #58a6ff; background: #0d1d30; }
+    .event-notification_step { border-left-color: #d2a8ff; background: #1a0d2e; }
+    .event-notification_complete { border-left-color: #bc8cff; background: #1a0d2e; }
+    .event-github_correlation { border-left-color: #8b949e; background: #161b22; }
+    .event-github_issue_created { border-left-color: #3fb950; background: #0d2818; }
     .insight-item { font-size: 12px; padding: 6px 0; border-bottom: 1px solid #21262d; }
     .insight-item:last-child { border-bottom: none; }
     .empty { color: #484f58; font-size: 12px; font-style: italic; }
@@ -229,6 +235,29 @@ export const dashboardHtml = `<!DOCTYPE html>
           return d.message || '';
         case 'error':
           return '<span style="color:#f85149">' + (d.message || 'Unknown error') + '</span>';
+        case 'report_step':
+          return '<br>&nbsp;&nbsp;Section: <strong>' + (d.section || '') + '</strong> — ' +
+            (d.status === 'complete' ? '<span style="color:#3fb950">complete</span>' :
+             d.status === 'failed' ? '<span style="color:#f85149">failed</span>' :
+             '<span style="color:#79c0ff">generating...</span>') +
+            (d.message ? '<br>&nbsp;&nbsp;' + d.message : '');
+        case 'report_complete':
+          return '<br>&nbsp;&nbsp;<span style="color:#58a6ff">Post-mortem report generated for incident #' + (d.incidentId || '?') + '</span>';
+        case 'notification_step':
+          if (d.success !== undefined) {
+            return '<br>&nbsp;&nbsp;' + (d.type || d.channel || '') + ': ' +
+              (d.success ? '<span style="color:#3fb950">delivered</span>' : '<span style="color:#f85149">failed' + (d.error ? ' — ' + d.error : '') + '</span>');
+          }
+          return '<br>&nbsp;&nbsp;' + (d.message || d.channel || '');
+        case 'notification_complete':
+          return '<br>&nbsp;&nbsp;<span style="color:#bc8cff">' + (d.successful || 0) + '/' + (d.total || 0) + ' notifications delivered for incident #' + (d.incidentId || '?') + '</span>';
+        case 'github_correlation':
+          return '<br>&nbsp;&nbsp;Version: ' + ((d.versionId || '').substring(0, 8)) +
+            (d.commits && d.commits.length > 0 ? '<br>&nbsp;&nbsp;Commits: ' + d.commits.map(function(c) { return c.sha.substring(0, 7) + ' — ' + c.message; }).join('<br>&nbsp;&nbsp;&nbsp;&nbsp;') : '') +
+            (d.pullRequests && d.pullRequests.length > 0 ? '<br>&nbsp;&nbsp;PRs: ' + d.pullRequests.map(function(pr) { return '#' + pr.number + ' — ' + pr.title; }).join('<br>&nbsp;&nbsp;&nbsp;&nbsp;') : '');
+        case 'github_issue_created':
+          return '<br>&nbsp;&nbsp;<span style="color:#3fb950">GitHub Issue #' + (d.number || '?') + ' created</span>' +
+            (d.url ? ' — <a href="' + d.url + '" target="_blank" style="color:#58a6ff">' + d.url + '</a>' : '');
         case 'init':
           return d.message || 'Initialized';
         default:

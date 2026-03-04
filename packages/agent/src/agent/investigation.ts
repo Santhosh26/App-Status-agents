@@ -1,5 +1,6 @@
-import type { Env, InvestigationReport, InvestigationStep, HealthCheckResult, DeployInfo } from '../types';
+import type { Env, InvestigationReport, InvestigationStep, HealthCheckResult, DeployInfo, GitHubCorrelation } from '../types';
 import * as cfApi from '../cloudflare-api';
+import * as githubApi from '../github-api';
 import { getSimilarPatterns } from './learning';
 
 type BroadcastFn = (type: string, data: unknown) => void;
@@ -111,6 +112,52 @@ export async function investigate(
     }
   } catch (e) {
     emitStep('Cloudflare API check', `Failed to query deployments: ${e instanceof Error ? e.message : 'unknown'}`);
+  }
+
+  // Step 2b: GitHub commit correlation
+  let githubCorrelation: GitHubCorrelation | undefined;
+  if (githubApi.isConfigured(env) && currentDeployment) {
+    emitStep('Querying GitHub for correlated commits', 'Checking recent commits and PRs near deployment time...');
+    try {
+      const correlation = await githubApi.correlateDeploymentWithCommits(env, currentDeployment.createdOn);
+      correlation.deploymentVersionId = currentDeployment.versionId;
+      githubCorrelation = correlation;
+
+      if (correlation.commits.length > 0) {
+        emitStep(
+          'GitHub commits correlated',
+          `Found ${correlation.commits.length} commit(s) near deployment:\n${correlation.commits.slice(0, 3).map(c => `  ${c.sha.substring(0, 7)} — ${c.message} (${c.author})`).join('\n')}`
+        );
+        broadcast('github_correlation', {
+          versionId: currentDeployment.versionId,
+          commits: correlation.commits,
+          pullRequests: correlation.pullRequests,
+        });
+      } else {
+        emitStep('GitHub correlation', 'No commits found in deployment time window');
+      }
+
+      if (correlation.pullRequests.length > 0) {
+        emitStep(
+          'GitHub PRs correlated',
+          `Found ${correlation.pullRequests.length} merged PR(s):\n${correlation.pullRequests.map(pr => `  #${pr.number} — ${pr.title} (${pr.author})`).join('\n')}`
+        );
+      }
+
+      // Store correlations in D1
+      for (const c of correlation.commits) {
+        await env.DB.prepare(
+          'INSERT INTO deployment_commits (version_id, commit_sha, commit_message, commit_author, commit_date) VALUES (?, ?, ?, ?, ?)'
+        ).bind(currentDeployment.versionId, c.sha, c.message, c.author, c.date).run();
+      }
+      for (const pr of correlation.pullRequests) {
+        await env.DB.prepare(
+          'INSERT INTO deployment_commits (version_id, pr_number, pr_title, pr_url, commit_date) VALUES (?, ?, ?, ?, ?)'
+        ).bind(currentDeployment.versionId, pr.number, pr.title, pr.url, pr.mergedAt).run();
+      }
+    } catch (e) {
+      emitStep('GitHub correlation failed', `Error: ${e instanceof Error ? e.message : 'unknown'}`);
+    }
   }
 
   // Step 3: Query past patterns
@@ -227,5 +274,6 @@ Respond ONLY with valid JSON in this exact format:
     evidence: steps,
     severity,
     rollbackTargetVersionId,
+    githubCorrelation,
   };
 }
