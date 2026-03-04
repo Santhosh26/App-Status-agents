@@ -1,11 +1,11 @@
 import type { Env, HealthCheckResult, MonitoredEndpoint } from '../types';
-import { mockApi } from '../mock-api/index';
 
 export async function runHealthChecks(
   endpoints: MonitoredEndpoint[],
   env: Env
 ): Promise<HealthCheckResult[]> {
   const results: HealthCheckResult[] = [];
+  const targetUrl = env.TARGET_API_URL;
 
   for (const ep of endpoints) {
     const start = Date.now();
@@ -14,9 +14,10 @@ export async function runHealthChecks(
     let error: string | undefined;
 
     try {
-      const url = `http://internal/mock${ep.path}`;
-      const req = new Request(url);
-      const res = await mockApi.fetch(req, env);
+      const url = `${targetUrl}${ep.path}`;
+      console.log(JSON.stringify({ phase: 'detection', event: 'health_check_start', endpoint: ep.path, url }));
+
+      const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
       statusCode = res.status;
       const elapsed = Date.now() - start;
 
@@ -30,6 +31,8 @@ export async function runHealthChecks(
         error = `Response too slow: ${elapsed}ms`;
       }
 
+      console.log(JSON.stringify({ phase: 'detection', event: 'health_check', endpoint: ep.path, status: statusCode, responseTimeMs: elapsed, isHealthy }));
+
       results.push({
         endpoint: ep.path,
         statusCode,
@@ -39,12 +42,16 @@ export async function runHealthChecks(
         checkedAt: new Date().toISOString(),
       });
     } catch (e) {
+      const elapsed = Date.now() - start;
+      const errMsg = e instanceof Error ? e.message : 'Unknown error';
+      console.log(JSON.stringify({ phase: 'detection', event: 'health_check_error', endpoint: ep.path, error: errMsg, responseTimeMs: elapsed }));
+
       results.push({
         endpoint: ep.path,
         statusCode: null,
-        responseTimeMs: Date.now() - start,
+        responseTimeMs: elapsed,
         isHealthy: false,
-        error: e instanceof Error ? e.message : 'Unknown error',
+        error: errMsg,
         checkedAt: new Date().toISOString(),
       });
     }

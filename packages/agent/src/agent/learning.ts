@@ -32,6 +32,8 @@ export async function recordIncidentPattern(
   broadcast('insight', {
     message: `Recorded ${report.affectedEndpoints.length} endpoint pattern(s), root cause pattern, and time correlation`,
   });
+
+  console.log(JSON.stringify({ phase: 'learning', event: 'patterns_recorded', endpoints: report.affectedEndpoints.length, rootCause: report.rootCause }));
 }
 
 async function upsertPattern(

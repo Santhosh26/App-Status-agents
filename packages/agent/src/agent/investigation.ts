@@ -1,15 +1,8 @@
-import type { Env, InvestigationReport, InvestigationStep, HealthCheckResult, DeployEntry, DeploymentRecord } from '../types';
-import { mockApi } from '../mock-api/index';
+import type { Env, InvestigationReport, InvestigationStep, HealthCheckResult, DeployInfo } from '../types';
+import * as cfApi from '../cloudflare-api';
 import { getSimilarPatterns } from './learning';
 
 type BroadcastFn = (type: string, data: unknown) => void;
-
-const ENDPOINT_SERVICE_MAP: Record<string, string> = {
-  '/api/orders': 'orders-service',
-  '/api/auth': 'auth-service',
-  '/api/payments': 'payments-service',
-  '/api/database': 'database-service',
-};
 
 export async function investigate(
   env: Env,
@@ -19,6 +12,7 @@ export async function investigate(
 ): Promise<InvestigationReport> {
   const steps: InvestigationStep[] = [];
   let stepNum = 0;
+  const targetUrl = env.TARGET_API_URL;
 
   function emitStep(action: string, result: string) {
     stepNum++;
@@ -30,9 +24,10 @@ export async function investigate(
     };
     steps.push(step);
     broadcast('investigation_step', step);
+    console.log(JSON.stringify({ phase: 'investigation', event: 'step', step: stepNum, action, result: result.substring(0, 200) }));
   }
 
-  // Step 1: Check all dependency endpoints individually
+  // Step 1: Check all dependency endpoints via real HTTP
   emitStep('Checking all service dependencies', 'Starting dependency scan...');
 
   const dependencyResults: Record<string, HealthCheckResult> = {};
@@ -41,7 +36,7 @@ export async function investigate(
   for (const ep of allEndpoints) {
     const start = Date.now();
     try {
-      const res = await mockApi.fetch(new Request(`http://internal/mock${ep}`), env);
+      const res = await fetch(`${targetUrl}${ep}`, { signal: AbortSignal.timeout(10000) });
       const elapsed = Date.now() - start;
       const isHealthy = res.status === 200 && elapsed < 5000;
       dependencyResults[ep] = {
@@ -68,89 +63,54 @@ export async function investigate(
     }
   }
 
-  // Step 2: Check deployment registry (real data from D1)
-  emitStep('Querying deployment registry', 'Checking active versions and recent deployments...');
+  // Step 2: Check Cloudflare deployment history via REST API
+  emitStep('Querying Cloudflare deployment history', 'Checking recent deployments via Cloudflare API...');
 
-  let deployHistory: DeployEntry[] = [];
-  const recentBadDeploys: DeploymentRecord[] = [];
+  let deployHistory: DeployInfo[] = [];
+  let currentDeployment: DeployInfo | null = null;
+  let previousDeployment: DeployInfo | null = null;
 
   try {
-    // Get all deployments from registry
-    const allDeploys = await env.DB.prepare(
-      'SELECT * FROM deployments ORDER BY deployed_at DESC LIMIT 20'
-    ).all<DeploymentRecord>();
+    deployHistory = await cfApi.listDeployments(env);
 
-    deployHistory = (allDeploys.results || []).map(r => ({
-      id: r.id,
-      service: r.service,
-      version: r.version,
-      commit_hash: r.commit_hash,
-      deployedAt: r.deployed_at,
-      author: r.author,
-      status: r.status as DeployEntry['status'],
-      is_healthy: !!r.is_healthy,
-    }));
+    if (deployHistory.length > 0) {
+      currentDeployment = deployHistory[0];
+      const deployAge = Date.now() - new Date(currentDeployment.createdOn).getTime();
+      const ageStr = deployAge < 3600000 ? `${Math.round(deployAge / 60000)} min ago` : `${Math.round(deployAge / 3600000)}h ago`;
 
-    // Show current active versions for affected services
-    for (const ep of affectedEndpoints) {
-      const service = ENDPOINT_SERVICE_MAP[ep];
-      if (!service) continue;
+      emitStep(
+        `Current deployment: ${env.TARGET_WORKER_NAME}`,
+        `Version **${currentDeployment.versionId.substring(0, 8)}** (deployed ${ageStr} by ${currentDeployment.author} via ${currentDeployment.source})`
+      );
 
-      const activeDeploy = await env.DB.prepare(
-        "SELECT * FROM deployments WHERE service = ? AND status = 'active' ORDER BY deployed_at DESC LIMIT 1"
-      ).bind(service).first<DeploymentRecord>();
-
-      if (activeDeploy) {
-        const deployAge = Date.now() - new Date(activeDeploy.deployed_at).getTime();
-        const ageStr = deployAge < 3600000 ? `${Math.round(deployAge / 60000)} min ago` : `${Math.round(deployAge / 3600000)}h ago`;
-
+      // Check if deployment is recent (within 30 min) — suspicious timing
+      if (deployAge < 1800000) {
         emitStep(
-          `Current active version: ${service}`,
-          `**${activeDeploy.version}** (commit ${activeDeploy.commit_hash}, deployed ${ageStr} by ${activeDeploy.author})${activeDeploy.is_healthy ? '' : ' — UNHEALTHY'}`
+          'Deploy correlation detected',
+          `Suspicious: new deployment ${currentDeployment.versionId.substring(0, 8)} was deployed ${Math.round(deployAge / 60000)} min ago, shortly before outage`
         );
-
-        if (!activeDeploy.is_healthy) {
-          recentBadDeploys.push(activeDeploy);
-        }
-
-        // Show previous stable version
-        const prevDeploy = await env.DB.prepare(
-          "SELECT * FROM deployments WHERE service = ? AND status = 'superseded' AND is_healthy = 1 ORDER BY deployed_at DESC LIMIT 1"
-        ).bind(service).first<DeploymentRecord>();
-
-        if (prevDeploy) {
-          const prevAge = Date.now() - new Date(prevDeploy.deployed_at).getTime();
-          const prevAgeStr = prevAge < 3600000 ? `${Math.round(prevAge / 60000)} min ago` : `${Math.round(prevAge / 86400000)} days ago`;
-
-          emitStep(
-            `Previous stable version: ${service}`,
-            `**${prevDeploy.version}** (commit ${prevDeploy.commit_hash}, deployed ${prevAgeStr}, was healthy)`
-          );
-        }
-
-        // Correlate timing
-        if (!activeDeploy.is_healthy) {
-          emitStep(
-            'Deploy correlation detected',
-            `Suspicious: ${activeDeploy.version} deployed shortly before outage started`
-          );
-        }
       }
     }
 
-    // Summary of recent deploys
-    const recentDeploys = (allDeploys.results || []).filter(d => {
-      const deployAge = Date.now() - new Date(d.deployed_at).getTime();
-      return deployAge < 3600000;
-    });
-    if (recentDeploys.length > 0) {
+    if (deployHistory.length > 1) {
+      previousDeployment = deployHistory[1];
+      const prevAge = Date.now() - new Date(previousDeployment.createdOn).getTime();
+      const prevAgeStr = prevAge < 3600000 ? `${Math.round(prevAge / 60000)} min ago` : prevAge < 86400000 ? `${Math.round(prevAge / 3600000)}h ago` : `${Math.round(prevAge / 86400000)} days ago`;
+
       emitStep(
-        'Recent deployment activity',
-        `${recentDeploys.length} deployment(s) in the last hour: ${recentDeploys.map(d => `${d.service} ${d.version} by ${d.author}`).join(', ')}`
+        `Previous deployment`,
+        `Version **${previousDeployment.versionId.substring(0, 8)}** (deployed ${prevAgeStr} by ${previousDeployment.author})`
       );
     }
-  } catch {
-    emitStep('Deploy registry check', 'Failed to query deployment registry');
+
+    if (deployHistory.length > 2) {
+      emitStep(
+        'Deployment history',
+        `${deployHistory.length} total deployments found. Last 3: ${deployHistory.slice(0, 3).map(d => d.versionId.substring(0, 8)).join(', ')}`
+      );
+    }
+  } catch (e) {
+    emitStep('Cloudflare API check', `Failed to query deployments: ${e instanceof Error ? e.message : 'unknown'}`);
   }
 
   // Step 3: Query past patterns
@@ -173,9 +133,12 @@ export async function investigate(
     .map(([ep, r]) => `${ep}: status=${r.statusCode}, time=${r.responseTimeMs}ms, error=${r.error || 'none'}`);
 
   // Build deploy context for AI
-  const deployContext = recentBadDeploys.length > 0
-    ? recentBadDeploys.map(d => `- ${d.service} ${d.version} (commit ${d.commit_hash}) by ${d.author}, deployed at ${d.deployed_at}, UNHEALTHY`).join('\n')
-    : 'No unhealthy deployments detected';
+  const recentDeployAge = currentDeployment ? Date.now() - new Date(currentDeployment.createdOn).getTime() : Infinity;
+  const isRecentDeploy = recentDeployAge < 1800000; // 30 min
+
+  const deployContext = currentDeployment
+    ? `Current deployment: version ${currentDeployment.versionId.substring(0, 8)}, deployed ${Math.round(recentDeployAge / 60000)} min ago by ${currentDeployment.author} via ${currentDeployment.source}.${isRecentDeploy ? ' RECENTLY DEPLOYED — possible cause.' : ''}`
+    : 'No deployment data available';
 
   let rootCause = 'unknown';
   let rootCauseConfidence = 0.5;
@@ -188,7 +151,7 @@ AFFECTED ENDPOINTS: ${affectedEndpoints.join(', ')}
 DEPENDENCY CHECK RESULTS:
 ${Object.entries(dependencyResults).map(([ep, r]) => `- ${ep}: ${r.isHealthy ? 'HEALTHY' : 'UNHEALTHY'} (status=${r.statusCode}, ${r.responseTimeMs}ms)`).join('\n')}
 
-DEPLOYMENT REGISTRY:
+DEPLOYMENT INFO:
 ${deployContext}
 
 PAST PATTERNS:
@@ -219,7 +182,7 @@ Respond ONLY with valid JSON in this exact format:
 
   // Heuristic fallback
   if (rootCause === 'unknown') {
-    if (recentBadDeploys.length > 0) {
+    if (isRecentDeploy) {
       rootCause = 'bad_deploy';
       rootCauseConfidence = 0.85;
     } else if (dependencyResults['/api/database'] && !dependencyResults['/api/database'].isHealthy) {
@@ -239,6 +202,12 @@ Respond ONLY with valid JSON in this exact format:
   const unhealthyCount = Object.values(dependencyResults).filter(r => !r.isHealthy).length;
   const severity = unhealthyCount >= 3 ? 'critical' : unhealthyCount >= 2 ? 'major' : 'minor';
 
+  // Set rollback target if bad_deploy
+  let rollbackTargetVersionId: string | undefined;
+  if (rootCause === 'bad_deploy' && previousDeployment) {
+    rollbackTargetVersionId = previousDeployment.versionId;
+  }
+
   return {
     incidentId,
     affectedEndpoints,
@@ -249,5 +218,6 @@ Respond ONLY with valid JSON in this exact format:
     rootCauseConfidence,
     evidence: steps,
     severity,
+    rollbackTargetVersionId,
   };
 }

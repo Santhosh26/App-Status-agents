@@ -75,5 +75,7 @@ Write a JSON response with:
 
   broadcast('status_update', statusUpdate);
 
+  console.log(JSON.stringify({ phase: 'communication', event: 'status_update_posted', incidentId, title }));
+
   return statusUpdate;
 }

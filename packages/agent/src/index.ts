@@ -1,24 +1,11 @@
 import { Hono } from 'hono';
 import { routeAgentRequest, getAgentByName } from 'agents';
 import type { Env } from './types';
-import { mockApi } from './mock-api/index';
-import { statusPageHtml } from './frontend/status-page';
-import { dashboardHtml } from './frontend/dashboard';
 
 // Re-export the StatusAgent Durable Object
 export { StatusAgent } from './agent/status-agent';
 
 const app = new Hono<{ Bindings: Env }>();
-
-// Status page
-app.get('/', (c) => {
-  return c.html(statusPageHtml);
-});
-
-// Dashboard
-app.get('/dashboard', (c) => {
-  return c.html(dashboardHtml);
-});
 
 // API: Current status — proxy to DO
 app.get('/api/status', async (c) => {
@@ -78,8 +65,19 @@ app.post('/api/endpoints', async (c) => {
   }));
 });
 
-// Mount mock API routes
-app.route('/', mockApi);
+// API: List Cloudflare deployments — proxy to DO
+app.get('/api/deployments', async (c) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stub = await getAgentByName(c.env.STATUS_AGENT as any, 'default');
+  return stub.fetch(new Request('http://agent/api/deployments'));
+});
+
+// API: Deploy bad version (quick demo) — proxy to DO
+app.post('/api/deploy-bad', async (c) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stub = await getAgentByName(c.env.STATUS_AGENT as any, 'default');
+  return stub.fetch(new Request('http://agent/api/deploy-bad', { method: 'POST' }));
+});
 
 // Default export — handle agent WebSocket routing first, then fall back to Hono
 export default {

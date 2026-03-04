@@ -18,6 +18,8 @@ export const dashboardHtml = `<!DOCTYPE html>
     button { background: #da3633; border-color: #da3633; color: #fff; font-weight: 600; }
     button:hover { background: #f85149; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-deploy { background: #d29922; border-color: #d29922; }
+    .btn-deploy:hover { background: #e3b341; }
     .main { overflow-y: auto; padding: 16px 20px; }
     .sidebar { background: #161b22; border-left: 1px solid #30363d; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
     .panel { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 12px; }
@@ -26,7 +28,6 @@ export const dashboardHtml = `<!DOCTYPE html>
     .service-row:last-child { border-bottom: none; }
     .service-info { display: flex; flex-direction: column; gap: 2px; }
     .service-name { display: flex; align-items: center; gap: 6px; }
-    .service-version { font-size: 10px; color: #8b949e; margin-left: 14px; }
     .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
     .dot-healthy { background: #3fb950; }
     .dot-degraded { background: #d29922; }
@@ -36,7 +37,6 @@ export const dashboardHtml = `<!DOCTYPE html>
     .deploy-row:last-child { border-bottom: none; }
     .deploy-service { color: #58a6ff; font-weight: 600; }
     .deploy-version { color: #3fb950; }
-    .deploy-commit { color: #8b949e; }
     .deploy-meta { color: #484f58; font-size: 10px; }
     .timeline { display: flex; flex-direction: column; gap: 4px; }
     .event { padding: 8px 12px; border-radius: 6px; font-size: 12px; line-height: 1.5; border-left: 3px solid #30363d; background: #161b22; }
@@ -66,12 +66,7 @@ export const dashboardHtml = `<!DOCTYPE html>
       <h1>StatusAgent Dashboard</h1>
       <div class="header-actions">
         <span id="wsStatus" class="ws-status ws-disconnected">Disconnected</span>
-        <select id="scenario">
-          <option value="orders_503">Orders 503 (Bad Deploy)</option>
-          <option value="database_pool">DB Pool Exhaustion</option>
-          <option value="orders_slow">Orders Slow</option>
-        </select>
-        <button id="triggerBtn" onclick="triggerIncident()">Trigger Incident</button>
+        <button id="deployBadBtn" class="btn-deploy" onclick="deployBadVersion()">Deploy Bad Version</button>
       </div>
     </header>
 
@@ -90,7 +85,7 @@ export const dashboardHtml = `<!DOCTYPE html>
       </div>
 
       <div class="panel">
-        <h3>Active Deployments</h3>
+        <h3>Current Deployment</h3>
         <div id="deploymentsPanel">
           <div class="empty">Loading...</div>
         </div>
@@ -116,15 +111,8 @@ export const dashboardHtml = `<!DOCTYPE html>
     let ws = null;
     let events = [];
     let firstEvent = true;
-    let currentVersions = {};
+    let currentDeployment = null;
     const ENDPOINT_NAMES = { '/api/orders': 'Orders API', '/api/auth': 'Auth Service', '/api/payments': 'Payments Service', '/api/database': 'Database' };
-    const SERVICE_NAMES = { 'orders-service': 'Orders API', 'auth-service': 'Auth Service', 'payments-service': 'Payments Service', 'database-service': 'Database' };
-    const SCENARIOS = {
-      orders_503: { endpoint: '/api/orders', mode: '503' },
-      database_pool: { endpoint: '/api/database', mode: 'pool_exhausted' },
-      orders_slow: { endpoint: '/api/orders', mode: 'slow' },
-    };
-    const ENDPOINT_TO_SERVICE = { '/api/orders': 'orders-service', '/api/auth': 'auth-service', '/api/payments': 'payments-service', '/api/database': 'database-service' };
 
     function connect() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -151,29 +139,26 @@ export const dashboardHtml = `<!DOCTYPE html>
         try {
           const msg = JSON.parse(e.data);
 
-          // Filter Agent SDK internal messages
           if (msg.type && msg.type.startsWith('cf_agent_')) return;
 
-          // Handle init state
           if (msg.type === 'init') {
             if (msg.data && msg.data.state) {
-              updateServices(msg.data.state.statuses || {}, msg.data.state.endpoints || [], msg.data.state.activeVersions || {});
-              if (msg.data.state.activeVersions) {
-                currentVersions = msg.data.state.activeVersions;
-                updateDeploymentsPanel(currentVersions);
+              updateServices(msg.data.state.statuses || {}, msg.data.state.endpoints || []);
+              if (msg.data.state.currentDeployment) {
+                currentDeployment = msg.data.state.currentDeployment;
+                updateDeploymentsPanel(currentDeployment);
               }
             }
             addEvent({ type: 'init', data: { message: 'Connected to StatusAgent' }, timestamp: msg.timestamp });
             return;
           }
 
-          // Handle state sync from agents SDK
           if (msg.type === 'cf_agent_state') {
             if (msg.state) {
-              updateServices(msg.state.statuses || {}, msg.state.endpoints || [], msg.state.activeVersions || {});
-              if (msg.state.activeVersions) {
-                currentVersions = msg.state.activeVersions;
-                updateDeploymentsPanel(currentVersions);
+              updateServices(msg.state.statuses || {}, msg.state.endpoints || []);
+              if (msg.state.currentDeployment) {
+                currentDeployment = msg.state.currentDeployment;
+                updateDeploymentsPanel(currentDeployment);
               }
             }
             return;
@@ -181,7 +166,6 @@ export const dashboardHtml = `<!DOCTYPE html>
 
           addEvent(msg);
 
-          // Update services panel on health check
           if (msg.type === 'health_check' && msg.data) {
             updateServicesFromCheck(msg.data);
           }
@@ -252,7 +236,7 @@ export const dashboardHtml = `<!DOCTYPE html>
       }
     }
 
-    function updateServices(statuses, endpoints, versions) {
+    function updateServices(statuses, endpoints) {
       const el = document.getElementById('servicePanel');
       if (!endpoints || endpoints.length === 0) {
         el.innerHTML = '<div class="empty">No services</div>';
@@ -260,75 +244,51 @@ export const dashboardHtml = `<!DOCTYPE html>
       }
       el.innerHTML = endpoints.map(ep => {
         const status = statuses[ep.path] || 'unknown';
-        const svc = ENDPOINT_TO_SERVICE[ep.path];
-        const ver = (versions && svc && versions[svc]) ? versions[svc] : null;
-        const versionText = ver ? '<span class="service-version">' + ver.version + ' (' + ver.commitHash.substring(0,7) + ')</span>' : '';
         return '<div class="service-row"><div class="service-info"><span class="service-name"><span class="dot dot-' + status + '"></span>' +
-          (ENDPOINT_NAMES[ep.path] || ep.name) + '</span>' + versionText + '</div><span>' + status + '</span></div>';
+          (ENDPOINT_NAMES[ep.path] || ep.name) + '</span></div><span>' + status + '</span></div>';
       }).join('');
     }
 
     function updateServicesFromCheck(data) {
       if (data.statuses) {
         const endpoints = Object.keys(data.statuses).map(path => ({ path, name: ENDPOINT_NAMES[path] || path }));
-        updateServices(data.statuses, endpoints, currentVersions);
+        updateServices(data.statuses, endpoints);
       }
     }
 
-    function updateDeploymentsPanel(versions) {
+    function updateDeploymentsPanel(deploy) {
       const el = document.getElementById('deploymentsPanel');
-      const services = Object.keys(versions);
-      if (services.length === 0) {
-        el.innerHTML = '<div class="empty">No deployments</div>';
+      if (!deploy) {
+        el.innerHTML = '<div class="empty">No deployment info</div>';
         return;
       }
-      el.innerHTML = services.map(svc => {
-        const v = versions[svc];
-        const age = Date.now() - new Date(v.deployedAt).getTime();
-        const ageStr = age < 3600000 ? Math.round(age / 60000) + 'm ago' : age < 86400000 ? Math.round(age / 3600000) + 'h ago' : Math.round(age / 86400000) + 'd ago';
-        return '<div class="deploy-row">' +
-          '<span class="deploy-service">' + (SERVICE_NAMES[svc] || svc) + '</span> ' +
-          '<span class="deploy-version">' + v.version + '</span> ' +
-          '<span class="deploy-commit">(' + v.commitHash.substring(0,7) + ')</span>' +
-          '<br><span class="deploy-meta">by ' + v.author + ' · ' + ageStr + '</span>' +
-          '</div>';
-      }).join('');
+      const age = Date.now() - new Date(deploy.createdOn).getTime();
+      const ageStr = age < 3600000 ? Math.round(age / 60000) + 'm ago' : age < 86400000 ? Math.round(age / 3600000) + 'h ago' : Math.round(age / 86400000) + 'd ago';
+      el.innerHTML = '<div class="deploy-row">' +
+        '<span class="deploy-service">target-api</span> ' +
+        '<span class="deploy-version">' + deploy.versionId.substring(0, 8) + '</span>' +
+        '<br><span class="deploy-meta">by ' + deploy.author + ' via ' + deploy.source + ' · ' + ageStr + '</span>' +
+        '</div>';
     }
 
-    async function triggerIncident() {
-      const btn = document.getElementById('triggerBtn');
+    async function deployBadVersion() {
+      const btn = document.getElementById('deployBadBtn');
       btn.disabled = true;
-      const scenario = SCENARIOS[document.getElementById('scenario').value];
+      btn.textContent = 'Deploying...';
       try {
-        await fetch('/mock/chaos', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(scenario),
-        });
+        const res = await fetch('/api/deploy-bad', { method: 'POST' });
+        const data = await res.json();
         addEvent({
           type: 'status_change',
-          data: { message: 'Chaos injected: ' + scenario.endpoint + ' -> ' + scenario.mode },
+          data: { message: data.success ? 'Bad version deployed: ' + data.message : 'Deploy failed: ' + data.message },
           timestamp: new Date().toISOString(),
         });
       } catch (e) {
-        addEvent({ type: 'error', data: { message: 'Failed to trigger: ' + e.message }, timestamp: new Date().toISOString() });
+        addEvent({ type: 'error', data: { message: 'Failed to deploy: ' + e.message }, timestamp: new Date().toISOString() });
       }
-      setTimeout(() => { btn.disabled = false; }, 5000);
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Deploy Bad Version'; }, 5000);
     }
 
-    // Periodically refresh active deployments
-    async function loadDeployments() {
-      try {
-        const res = await fetch('/mock/deploy/active');
-        const data = await res.json();
-        if (data.versions) {
-          currentVersions = data.versions;
-          updateDeploymentsPanel(currentVersions);
-        }
-      } catch { /* retry */ }
-    }
-
-    // Load insights
     async function loadInsights() {
       try {
         const res = await fetch('/api/insights');
@@ -353,9 +313,7 @@ export const dashboardHtml = `<!DOCTYPE html>
 
     connect();
     loadInsights();
-    loadDeployments();
     setInterval(loadInsights, 30000);
-    setInterval(loadDeployments, 10000);
   </script>
 </body>
 </html>`;

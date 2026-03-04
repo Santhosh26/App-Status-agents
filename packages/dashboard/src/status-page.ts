@@ -45,6 +45,7 @@ export const statusPageHtml = `<!DOCTYPE html>
     .status-identified { color: #ffc107; }
     .status-remediated { color: #17a2b8; }
     .incident-action { font-size: 13px; color: #6c757d; margin-bottom: 4px; padding: 6px 10px; background: #f8f9fa; border-radius: 6px; }
+    .deploy-info { font-size: 12px; color: #6c757d; margin-top: 8px; padding: 8px 12px; background: #f0f0f0; border-radius: 6px; }
     .empty-state { text-align: center; padding: 40px; color: #adb5bd; font-size: 14px; }
     footer { text-align: center; padding: 32px 0; font-size: 12px; color: #adb5bd; }
     footer a { color: #6c757d; }
@@ -66,6 +67,8 @@ export const statusPageHtml = `<!DOCTYPE html>
       </div>
     </div>
 
+    <div id="deployInfo" class="deploy-info" style="display:none;margin-bottom:32px;"></div>
+
     <div class="section">
       <h2>Recent Incidents</h2>
       <div id="incidents">
@@ -81,16 +84,14 @@ export const statusPageHtml = `<!DOCTYPE html>
   <script>
     const STATUS_LABELS = { healthy: 'Operational', degraded: 'Degraded', down: 'Outage' };
     const ENDPOINT_NAMES = { '/api/orders': 'Orders API', '/api/auth': 'Auth Service', '/api/payments': 'Payments Service', '/api/database': 'Database' };
-    const ENDPOINT_TO_SERVICE = { '/api/orders': 'orders-service', '/api/auth': 'auth-service', '/api/payments': 'payments-service', '/api/database': 'database-service' };
-    let activeVersions = {};
 
     async function fetchStatus() {
       try {
         const res = await fetch('/api/status');
         const data = await res.json();
-        if (data.activeVersions) activeVersions = data.activeVersions;
         renderServices(data);
         updateBanner(data.statuses);
+        if (data.currentDeployment) renderDeployInfo(data.currentDeployment);
       } catch { /* retry next cycle */ }
     }
 
@@ -110,15 +111,21 @@ export const statusPageHtml = `<!DOCTYPE html>
       }
       el.innerHTML = data.endpoints.map(ep => {
         const status = data.statuses[ep.path] || 'healthy';
-        const svc = ENDPOINT_TO_SERVICE[ep.path];
-        const ver = (activeVersions && svc && activeVersions[svc]) ? activeVersions[svc] : null;
-        const versionText = ver ? '<span class="service-version">' + ver.version + ' (' + ver.commitHash.substring(0,7) + ')</span>' : '';
         return '<div class="service-item">' +
-          '<div class="service-left"><span class="service-name">' + (ENDPOINT_NAMES[ep.path] || ep.name) + '</span>' + versionText + '</div>' +
+          '<div class="service-left"><span class="service-name">' + (ENDPOINT_NAMES[ep.path] || ep.name) + '</span></div>' +
           '<span class="status-badge"><span class="status-dot dot-' + status + '"></span>' +
           '<span class="text-' + status + '">' + STATUS_LABELS[status] + '</span></span>' +
           '</div>';
       }).join('');
+    }
+
+    function renderDeployInfo(deploy) {
+      const el = document.getElementById('deployInfo');
+      if (!deploy) { el.style.display = 'none'; return; }
+      el.style.display = 'block';
+      const age = Date.now() - new Date(deploy.createdOn).getTime();
+      const ageStr = age < 3600000 ? Math.round(age / 60000) + 'm ago' : age < 86400000 ? Math.round(age / 3600000) + 'h ago' : Math.round(age / 86400000) + 'd ago';
+      el.innerHTML = 'Current deployment: <strong>' + deploy.versionId.substring(0, 8) + '</strong> (deployed ' + ageStr + ' by ' + deploy.author + ')';
     }
 
     function updateBanner(statuses) {
@@ -156,7 +163,6 @@ export const statusPageHtml = `<!DOCTYPE html>
         const endpoints = Array.isArray(inc.affected_endpoints) ? inc.affected_endpoints.join(', ') : '';
         const rootCause = inc.root_cause ? inc.root_cause.replace(/_/g, ' ') : 'Investigating';
 
-        // Build remediation description
         let actionText = '';
         if (inc.remediation_action) {
           actionText = formatAction(inc.remediation_action);
@@ -178,10 +184,8 @@ export const statusPageHtml = `<!DOCTYPE html>
       }).join('');
     }
 
-    // Initial load
     fetchStatus();
     fetchIncidents();
-    // Poll
     setInterval(fetchStatus, 10000);
     setInterval(fetchIncidents, 30000);
   </script>

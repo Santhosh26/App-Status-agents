@@ -1,19 +1,23 @@
 {
-  "name": "status-agent",
+  "name": "status-agent-monorepo",
   "version": "1.0.0",
   "private": true,
+  "workspaces": [
+    "packages/target-api",
+    "packages/agent",
+    "packages/dashboard"
+  ],
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "db:init": "wrangler d1 execute status-agent-db --local --file=schema.sql"
-  },
-  "dependencies": {
-    "agents": "^0.7.2",
-    "hono": "^4.7.0"
+    "dev": "npm run dev --workspaces --if-present",
+    "deploy": "npm run deploy --workspaces --if-present",
+    "dev:target": "npm run dev -w packages/target-api",
+    "dev:agent": "npm run dev -w packages/agent",
+    "dev:dashboard": "npm run dev -w packages/dashboard",
+    "deploy:target": "npm run deploy -w packages/target-api",
+    "deploy:agent": "npm run deploy -w packages/agent",
+    "deploy:dashboard": "npm run deploy -w packages/dashboard"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250312.0",
-    "typescript": "^5.7.0",
-    "wrangler": "^4.10.0"
+    "typescript": "^5.7.0"
   }
 }

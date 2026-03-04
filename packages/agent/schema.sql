@@ -44,28 +44,7 @@ CREATE TABLE IF NOT EXISTS agent_memory (
   last_seen TEXT DEFAULT (datetime('now'))
 );
 
--- Chaos state for mock API
-CREATE TABLE IF NOT EXISTS chaos_state (
-  endpoint TEXT PRIMARY KEY,
-  mode TEXT DEFAULT 'healthy',
-  updated_at TEXT DEFAULT (datetime('now'))
-);
-
--- Deployment registry
-CREATE TABLE IF NOT EXISTS deployments (
-  id TEXT PRIMARY KEY,
-  service TEXT NOT NULL,
-  version TEXT NOT NULL,
-  commit_hash TEXT NOT NULL,
-  author TEXT NOT NULL,
-  status TEXT DEFAULT 'active',     -- 'active' | 'rolled_back' | 'superseded'
-  is_healthy BOOLEAN DEFAULT 1,
-  deployed_at TEXT DEFAULT (datetime('now')),
-  rolled_back_at TEXT
-);
-
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_health_checks_endpoint ON health_checks(endpoint, checked_at);
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
 CREATE INDEX IF NOT EXISTS idx_agent_memory_type ON agent_memory(pattern_type, pattern_key);
-CREATE INDEX IF NOT EXISTS idx_deployments_service ON deployments(service, status);

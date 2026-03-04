@@ -1,0 +1,15 @@
+name = "status-agent-dashboard"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[services]]
+binding = "AGENT"
+service = "status-agent"
+
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = true
+head_sampling_rate = 1

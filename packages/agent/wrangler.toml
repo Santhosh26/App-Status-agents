@@ -19,3 +19,17 @@ bindings = [
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["StatusAgent"]
+
+[vars]
+TARGET_API_URL = "https://status-agent-target-api.santgutz2000.workers.dev"
+CF_ACCOUNT_ID = "75e9c0f2f8195fc7acfc424a3bee313e"
+TARGET_WORKER_NAME = "status-agent-target-api"
+
+# CLOUDFLARE_API_TOKEN must be set via: npx wrangler secret put CLOUDFLARE_API_TOKEN
+
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = true
+head_sampling_rate = 1

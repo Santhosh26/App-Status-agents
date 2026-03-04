@@ -1,33 +1,18 @@
 import { Agent } from 'agents';
 import type { Connection } from 'agents';
-import type { Env, StatusAgentState, WSEvent, EndpointStatus, HealthCheckResult, MonitoredEndpoint, ActiveVersion, DeploymentRecord } from '../types';
+import type { Env, StatusAgentState, WSEvent, EndpointStatus, HealthCheckResult, MonitoredEndpoint, DeployInfo } from '../types';
 import { runHealthChecks } from './detection';
 import { investigate } from './investigation';
 import { remediate } from './remediation';
 import { generateStatusUpdate } from './communication';
 import { recordIncidentPattern, getInsights } from './learning';
+import * as cfApi from '../cloudflare-api';
 
 const DEFAULT_ENDPOINTS: MonitoredEndpoint[] = [
   { path: '/api/orders', name: 'Orders API', expectedStatus: 200 },
   { path: '/api/auth', name: 'Auth Service', expectedStatus: 200 },
   { path: '/api/payments', name: 'Payments Service', expectedStatus: 200 },
   { path: '/api/database', name: 'Database', expectedStatus: 200 },
-];
-
-const BASELINE_DEPLOYMENTS = [
-  { id: 'dep-baseline-001', service: 'orders-service', version: 'v1.8.0', commit_hash: 'b4e8f1a', author: 'ci-bot' },
-  { id: 'dep-baseline-002', service: 'auth-service', version: 'v3.1.2', commit_hash: 'c7d2e9b', author: 'ci-bot' },
-  { id: 'dep-baseline-003', service: 'payments-service', version: 'v2.4.0', commit_hash: 'd5f3a8c', author: 'ci-bot' },
-  { id: 'dep-baseline-004', service: 'database-service', version: 'v4.0.1', commit_hash: 'e6g4b9d', author: 'ci-bot' },
-];
-
-// Historical deployments for richer rollback AI reasoning
-const HISTORICAL_DEPLOYMENTS = [
-  { id: 'dep-hist-001', service: 'orders-service', version: 'v1.7.2', commit_hash: 'f2a9c3e', author: 'dev-team', daysAgo: 5 },
-  { id: 'dep-hist-002', service: 'orders-service', version: 'v1.7.0', commit_hash: '8b3d4e1', author: 'ci-bot', daysAgo: 14 },
-  { id: 'dep-hist-003', service: 'auth-service', version: 'v3.1.0', commit_hash: 'a1b2c3d', author: 'ci-bot', daysAgo: 10 },
-  { id: 'dep-hist-004', service: 'payments-service', version: 'v2.3.1', commit_hash: 'e4f5g6h', author: 'dev-team', daysAgo: 7 },
-  { id: 'dep-hist-005', service: 'database-service', version: 'v4.0.0', commit_hash: 'i7j8k9l', author: 'ci-bot', daysAgo: 12 },
 ];
 
 export class StatusAgent extends Agent<Env, StatusAgentState> {
@@ -37,7 +22,7 @@ export class StatusAgent extends Agent<Env, StatusAgentState> {
     isInvestigating: false,
     activeIncidentId: null,
     lastCheckAt: null,
-    activeVersions: {},
+    currentDeployment: null,
   };
 
   async onStart() {
@@ -47,58 +32,29 @@ export class StatusAgent extends Agent<Env, StatusAgentState> {
       CREATE TABLE IF NOT EXISTS incidents (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT DEFAULT 'investigating', severity TEXT DEFAULT 'minor', affected_endpoints TEXT, root_cause TEXT, root_cause_confidence REAL, evidence TEXT, remediation_action TEXT, remediation_result TEXT, started_at TEXT DEFAULT (datetime('now')), resolved_at TEXT, duration_seconds INTEGER);
       CREATE TABLE IF NOT EXISTS status_updates (id INTEGER PRIMARY KEY AUTOINCREMENT, incident_id INTEGER REFERENCES incidents(id), title TEXT NOT NULL, body TEXT NOT NULL, severity TEXT, created_at TEXT DEFAULT (datetime('now')));
       CREATE TABLE IF NOT EXISTS agent_memory (id INTEGER PRIMARY KEY AUTOINCREMENT, pattern_type TEXT, pattern_key TEXT, pattern_data TEXT, occurrence_count INTEGER DEFAULT 1, last_seen TEXT DEFAULT (datetime('now')));
-      CREATE TABLE IF NOT EXISTS chaos_state (endpoint TEXT PRIMARY KEY, mode TEXT DEFAULT 'healthy', updated_at TEXT DEFAULT (datetime('now')));
-      CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, service TEXT NOT NULL, version TEXT NOT NULL, commit_hash TEXT NOT NULL, author TEXT NOT NULL, status TEXT DEFAULT 'active', is_healthy BOOLEAN DEFAULT 1, deployed_at TEXT DEFAULT (datetime('now')), rolled_back_at TEXT);
-      CREATE INDEX IF NOT EXISTS idx_deployments_service ON deployments(service, status);
     `);
 
-    // Seed baseline deployments if table is empty
-    const count = await this.env.DB.prepare('SELECT COUNT(*) as cnt FROM deployments').first<{ cnt: number }>();
-    if (!count || count.cnt === 0) {
-      // Insert historical deployments first (older, superseded)
-      for (const h of HISTORICAL_DEPLOYMENTS) {
-        const deployedAt = new Date(Date.now() - h.daysAgo * 86400000).toISOString().replace('T', ' ').slice(0, 19);
-        await this.env.DB.prepare(
-          'INSERT INTO deployments (id, service, version, commit_hash, author, status, is_healthy, deployed_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)'
-        ).bind(h.id, h.service, h.version, h.commit_hash, h.author, 'superseded', deployedAt).run();
-      }
-
-      // Insert current active deployments (2 days ago baseline)
-      for (const d of BASELINE_DEPLOYMENTS) {
-        const deployedAt = new Date(Date.now() - 2 * 86400000).toISOString().replace('T', ' ').slice(0, 19);
-        await this.env.DB.prepare(
-          'INSERT INTO deployments (id, service, version, commit_hash, author, status, is_healthy, deployed_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)'
-        ).bind(d.id, d.service, d.version, d.commit_hash, d.author, 'active', deployedAt).run();
-      }
-    }
-
-    // Load active versions into state
-    await this.refreshActiveVersions();
+    // Try to load current deployment info from Cloudflare API
+    await this.refreshDeploymentInfo();
 
     // Schedule health checks every 30 seconds
     await this.schedule(30, 'performHealthCheck');
+
+    console.log(JSON.stringify({ phase: 'agent', event: 'started', targetApiUrl: this.env.TARGET_API_URL }));
   }
 
-  async refreshActiveVersions() {
-    const rows = await this.env.DB.prepare(
-      "SELECT * FROM deployments WHERE status = 'active'"
-    ).all<DeploymentRecord>();
-
-    const activeVersions: Record<string, ActiveVersion> = {};
-    for (const r of rows.results || []) {
-      activeVersions[r.service] = {
-        version: r.version,
-        commitHash: r.commit_hash,
-        deployedAt: r.deployed_at,
-        author: r.author,
-      };
+  async refreshDeploymentInfo() {
+    try {
+      if (this.env.CLOUDFLARE_API_TOKEN && this.env.CF_ACCOUNT_ID) {
+        const current = await cfApi.getCurrentDeployment(this.env);
+        this.setState({ ...this.state, currentDeployment: current });
+      }
+    } catch (e) {
+      console.log(JSON.stringify({ phase: 'agent', event: 'deployment_info_error', error: e instanceof Error ? e.message : 'unknown' }));
     }
-
-    this.setState({ ...this.state, activeVersions });
   }
 
   async onConnect(connection: Connection) {
-    // Send current state to newly connected client
     connection.send(JSON.stringify({
       type: 'init',
       data: {
@@ -145,8 +101,8 @@ export class StatusAgent extends Agent<Env, StatusAgentState> {
       }
     }
 
-    // Refresh active versions on each check
-    await this.refreshActiveVersions();
+    // Refresh deployment info on each check
+    await this.refreshDeploymentInfo();
 
     this.setState({
       ...this.state,
@@ -199,8 +155,8 @@ export class StatusAgent extends Agent<Env, StatusAgentState> {
       // Phase 3: Remediation
       const remediationResult = await remediate(this.env, broadcast, report);
 
-      // Refresh active versions after remediation (rollback may have changed them)
-      await this.refreshActiveVersions();
+      // Refresh deployment info after remediation (rollback may have changed it)
+      await this.refreshDeploymentInfo();
 
       // Update incident with remediation
       await this.env.DB.prepare(
@@ -256,7 +212,7 @@ export class StatusAgent extends Agent<Env, StatusAgentState> {
     this.broadcast(JSON.stringify(event));
   }
 
-  // Handle API requests forwarded from the main worker
+  // Handle API requests forwarded from the main worker or dashboard
   async onRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
@@ -267,7 +223,7 @@ export class StatusAgent extends Agent<Env, StatusAgentState> {
         lastCheckAt: this.state.lastCheckAt,
         isInvestigating: this.state.isInvestigating,
         activeIncidentId: this.state.activeIncidentId,
-        activeVersions: this.state.activeVersions,
+        currentDeployment: this.state.currentDeployment,
       });
     }
 
@@ -280,6 +236,24 @@ export class StatusAgent extends Agent<Env, StatusAgentState> {
       const body = await request.json() as { endpoints: StatusAgentState['endpoints'] };
       this.setState({ ...this.state, endpoints: body.endpoints });
       return Response.json({ success: true, endpoints: body.endpoints });
+    }
+
+    if (url.pathname === '/api/deployments') {
+      try {
+        const deployments = await cfApi.listDeployments(this.env);
+        return Response.json({ deployments });
+      } catch (e) {
+        return Response.json({ error: e instanceof Error ? e.message : 'Failed to fetch deployments' }, { status: 500 });
+      }
+    }
+
+    if (url.pathname === '/api/deploy-bad' && request.method === 'POST') {
+      try {
+        const result = await cfApi.deployBadVersion(this.env);
+        return Response.json(result);
+      } catch (e) {
+        return Response.json({ error: e instanceof Error ? e.message : 'Failed to deploy bad version' }, { status: 500 });
+      }
     }
 
     return new Response('Not found', { status: 404 });
