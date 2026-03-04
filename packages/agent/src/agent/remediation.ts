@@ -119,8 +119,24 @@ async function remediateBadDeploy(
   });
   await delay(500);
 
-  // Step 4: Determine rollback target
-  let targetVersionId = report.rollbackTargetVersionId || previousDeploy.versionId;
+  // Step 4: Determine rollback target — find a DIFFERENT version than current
+  const currentVersionId = currentDeploy.versionId;
+  const fallbackCandidate = deployments.find(d => d.versionId !== currentVersionId);
+  let targetVersionId = report.rollbackTargetVersionId || fallbackCandidate?.versionId || '';
+
+  if (!targetVersionId) {
+    broadcast('remediation_step', {
+      action: 'rollback_failed',
+      description: 'No different version found in deployment history to roll back to',
+      phase: 'failed',
+    });
+    return {
+      action: playbook.action,
+      success: false,
+      message: 'No different version available for rollback.',
+      recoveryVerified: false,
+    };
+  }
 
   // Ask AI for recommendation
   broadcast('remediation_step', {
@@ -157,7 +173,7 @@ Respond ONLY with valid JSON:
     } as never);
 
     const aiText = typeof aiResponse === 'object' && aiResponse !== null && 'response' in aiResponse
-      ? (aiResponse as { response: string }).response : '';
+      ? String((aiResponse as { response: unknown }).response || '') : '';
     if (aiText) {
       const jsonMatch = aiText.match(/\{[\s\S]*?\}/);
       if (jsonMatch) {

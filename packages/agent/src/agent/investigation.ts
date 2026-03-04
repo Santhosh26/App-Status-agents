@@ -166,7 +166,7 @@ Respond ONLY with valid JSON in this exact format:
     } as never);
 
     const aiText = typeof aiResponse === 'object' && aiResponse !== null && 'response' in aiResponse
-      ? (aiResponse as { response: string }).response : '';
+      ? String((aiResponse as { response: unknown }).response || '') : '';
     if (aiText) {
       const jsonMatch = aiText.match(/\{[\s\S]*?\}/);
       if (jsonMatch) {
@@ -202,10 +202,18 @@ Respond ONLY with valid JSON in this exact format:
   const unhealthyCount = Object.values(dependencyResults).filter(r => !r.isHealthy).length;
   const severity = unhealthyCount >= 3 ? 'critical' : unhealthyCount >= 2 ? 'major' : 'minor';
 
-  // Set rollback target if bad_deploy
+  // Set rollback target if bad_deploy — find last known-good version
+  // Skip versions with the same versionId as current (same code), and look for
+  // a different version that was previously working
   let rollbackTargetVersionId: string | undefined;
-  if (rootCause === 'bad_deploy' && previousDeployment) {
-    rollbackTargetVersionId = previousDeployment.versionId;
+  if (rootCause === 'bad_deploy' && deployHistory.length > 1) {
+    const currentVersionId = deployHistory[0]?.versionId;
+    // Find the first deployment with a DIFFERENT version ID (different code)
+    const candidate = deployHistory.find(d => d.versionId !== currentVersionId);
+    if (candidate) {
+      rollbackTargetVersionId = candidate.versionId;
+      emitStep('Rollback target identified', `Found different version **${candidate.versionId.substring(0, 8)}** (deployed by ${candidate.author} on ${new Date(candidate.createdOn).toLocaleString()})`);
+    }
   }
 
   return {

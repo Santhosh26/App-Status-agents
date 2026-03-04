@@ -31,7 +31,7 @@ Write a JSON response with:
     } as never);
 
     const aiText = typeof aiResponse === 'object' && aiResponse !== null && 'response' in aiResponse
-      ? (aiResponse as { response: string }).response : '';
+      ? String((aiResponse as { response: unknown }).response || '') : '';
     if (aiText) {
       const jsonMatch = aiText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
