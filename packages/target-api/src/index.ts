@@ -14,7 +14,7 @@ app.get('/health', (c) => {
 // Orders API
 app.get('/api/orders', (c) => {
   return c.json({ error: 'Service misconfigured', service: 'orders-service' }, 503);
-});
+}); 
 
 // Auth service
 app.get('/api/auth', (c) => {
