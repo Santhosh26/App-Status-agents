@@ -112,6 +112,15 @@ export class StatusAgent extends Agent<Env, StatusAgentState> {
 
     this.broadcastEvent('health_check', { results, statuses: newStatuses });
 
+    // Safety: reset stuck investigation state (stale for >3 min)
+    if (this.state.isInvestigating && this.state.lastCheckAt) {
+      const staleMs = Date.now() - new Date(this.state.lastCheckAt).getTime();
+      if (staleMs > 180000) {
+        console.log(JSON.stringify({ phase: 'agent', event: 'reset_stale_investigation' }));
+        this.setState({ ...this.state, isInvestigating: false, activeIncidentId: null });
+      }
+    }
+
     // If unhealthy endpoints and not already investigating, trigger investigation
     if (unhealthy.length > 0 && !this.state.isInvestigating) {
       await this.triggerInvestigation(unhealthy);
@@ -225,6 +234,11 @@ export class StatusAgent extends Agent<Env, StatusAgentState> {
         activeIncidentId: this.state.activeIncidentId,
         currentDeployment: this.state.currentDeployment,
       });
+    }
+
+    if (url.pathname === '/api/reset' && request.method === 'POST') {
+      this.setState({ ...this.state, isInvestigating: false, activeIncidentId: null });
+      return Response.json({ success: true, message: 'Agent state reset' });
     }
 
     if (url.pathname === '/api/insights') {

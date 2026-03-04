@@ -72,6 +72,13 @@ app.get('/api/deployments', async (c) => {
   return stub.fetch(new Request('http://agent/api/deployments'));
 });
 
+// API: Reset agent state (unstick investigation)
+app.post('/api/reset', async (c) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stub = await getAgentByName(c.env.STATUS_AGENT as any, 'default');
+  return stub.fetch(new Request('http://agent/api/reset', { method: 'POST' }));
+});
+
 // API: Deploy bad version (quick demo) — proxy to DO
 app.post('/api/deploy-bad', async (c) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
