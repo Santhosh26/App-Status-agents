@@ -1,0 +1,21 @@
+name = "status-agent"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "status-agent-db"
+database_id = "8731667b-ecc3-47e6-bbb0-83f126c60f67"
+
+[durable_objects]
+bindings = [
+  { name = "STATUS_AGENT", class_name = "StatusAgent" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["StatusAgent"]

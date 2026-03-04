@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:blog.cloudflare.com)",
+      "WebFetch(domain:vinext.io)",
+      "WebFetch(domain:developers.cloudflare.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(python:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run:*)",
+      "Bash(timeout 15 npx wrangler:*)",
+      "Bash(rm:*)",
+      "Bash(npx wrangler:*)"
+    ]
+  }
+}
