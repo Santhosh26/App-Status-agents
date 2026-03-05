@@ -11,7 +11,7 @@ app.get('/health', (c) => {
   });
 });
 
-// Orders API
+// Orders API -
 app.get('/api/orders', (c) => {
   console.log(JSON.stringify({ endpoint: '/api/orders', event: 'request', status: 200 }));
   return c.json({
