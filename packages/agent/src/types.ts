@@ -114,7 +114,8 @@ export type WSEventType =
   | 'notification_step'
   | 'notification_complete'
   | 'github_correlation'
-  | 'github_issue_created';
+  | 'github_issue_created'
+  | 'github_revert_pr';
 
 export interface WSEvent {
   type: WSEventType;
@@ -239,4 +240,11 @@ export interface GitHubIssue {
   number: number;
   title: string;
   url: string;
+}
+
+export interface GitHubRevertPR {
+  prNumber: number;
+  prUrl: string;
+  branchName: string;
+  badCommitSha: string;
 }

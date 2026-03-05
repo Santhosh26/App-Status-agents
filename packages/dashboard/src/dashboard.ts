@@ -57,6 +57,7 @@ export const dashboardHtml = `<!DOCTYPE html>
     .event-notification_complete { border-left-color: #bc8cff; background: #1a0d2e; }
     .event-github_correlation { border-left-color: #8b949e; background: #161b22; }
     .event-github_issue_created { border-left-color: #3fb950; background: #0d2818; }
+    .event-github_revert_pr { border-left-color: #a371f7; background: #1a0d2e; }
     .insight-item { font-size: 12px; padding: 6px 0; border-bottom: 1px solid #21262d; }
     .insight-item:last-child { border-bottom: none; }
     .empty { color: #484f58; font-size: 12px; font-style: italic; }
@@ -255,6 +256,11 @@ export const dashboardHtml = `<!DOCTYPE html>
           return '<br>&nbsp;&nbsp;Version: ' + ((d.versionId || '').substring(0, 8)) +
             (d.commits && d.commits.length > 0 ? '<br>&nbsp;&nbsp;Commits: ' + d.commits.map(function(c) { return c.sha.substring(0, 7) + ' — ' + c.message; }).join('<br>&nbsp;&nbsp;&nbsp;&nbsp;') : '') +
             (d.pullRequests && d.pullRequests.length > 0 ? '<br>&nbsp;&nbsp;PRs: ' + d.pullRequests.map(function(pr) { return '#' + pr.number + ' — ' + pr.title; }).join('<br>&nbsp;&nbsp;&nbsp;&nbsp;') : '');
+        case 'github_revert_pr':
+          return '<br>&nbsp;&nbsp;<span style="color:#a371f7">Revert PR #' + (d.prNumber || '?') + ' created</span>' +
+            (d.prUrl ? ' — <a href="' + d.prUrl + '" target="_blank" style="color:#58a6ff">' + d.prUrl + '</a>' : '') +
+            '<br>&nbsp;&nbsp;Branch: <code>' + (d.branchName || '') + '</code>' +
+            ' | Bad commit: <code>' + ((d.badCommitSha || '').substring(0, 7)) + '</code>';
         case 'github_issue_created':
           return '<br>&nbsp;&nbsp;<span style="color:#3fb950">GitHub Issue #' + (d.number || '?') + ' created</span>' +
             (d.url ? ' — <a href="' + d.url + '" target="_blank" style="color:#58a6ff">' + d.url + '</a>' : '');

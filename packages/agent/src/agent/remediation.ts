@@ -251,8 +251,59 @@ Respond ONLY with valid JSON:
 
   console.log(JSON.stringify({ phase: 'remediation', event: 'rollback_complete', success: allRecovered, targetVersionId }));
 
-  // Create GitHub Issue for the rollback incident
+  // Create GitHub Revert PR and Issue for the rollback incident
   if (githubApi.isConfigured(env)) {
+    let revertPrUrl: string | undefined;
+
+    // Step 7: Create revert PR if we have correlated commits
+    const commits = report.githubCorrelation?.commits;
+    if (commits && commits.length > 0) {
+      try {
+        const badCommitSha = commits[0].sha;
+
+        broadcast('remediation_step', {
+          action: 'github_revert_branch',
+          description: `Creating revert branch from parent of bad commit ${badCommitSha.substring(0, 7)}...`,
+          phase: 'executing',
+        });
+
+        const branch = await githubApi.createRevertBranch(env, badCommitSha);
+
+        if (branch) {
+          broadcast('remediation_step', {
+            action: 'github_revert_branch',
+            description: `Branch \`${branch.branchName}\` created at parent commit ${branch.parentSha.substring(0, 7)}`,
+            phase: 'executing',
+          });
+
+          const revertPr = await githubApi.createRevertPR(env, branch.branchName, badCommitSha, {
+            severity: report.severity,
+            affectedEndpoints: report.affectedEndpoints,
+            rootCause: report.rootCause,
+          });
+
+          if (revertPr) {
+            revertPrUrl = revertPr.prUrl;
+
+            broadcast('github_revert_pr', {
+              prNumber: revertPr.prNumber,
+              prUrl: revertPr.prUrl,
+              branchName: revertPr.branchName,
+              badCommitSha: revertPr.badCommitSha,
+            });
+            broadcast('remediation_step', {
+              action: 'github_revert_pr',
+              description: `Revert PR #${revertPr.prNumber} created: ${revertPr.prUrl}`,
+              phase: 'executing',
+            });
+          }
+        }
+      } catch (e) {
+        console.log(JSON.stringify({ phase: 'remediation', event: 'github_revert_pr_error', error: e instanceof Error ? e.message : 'unknown' }));
+      }
+    }
+
+    // Step 8: Create GitHub Issue (links to revert PR if available)
     try {
       broadcast('remediation_step', {
         action: 'github_issue',
@@ -261,6 +312,9 @@ Respond ONLY with valid JSON:
       });
 
       const issueTitle = `[Incident] Rollback: ${currentDeploy.versionId.substring(0, 8)} → ${targetVersionId.substring(0, 8)}`;
+      const revertPrSection = revertPrUrl
+        ? `\n### Revert PR\n- **PR:** ${revertPrUrl}\n- **Action required:** Merge the revert PR to prevent re-deploying broken code.\n`
+        : '';
       const issueBody = `## Automated Incident Report
 
 **Severity:** ${report.severity}
@@ -272,7 +326,7 @@ Respond ONLY with valid JSON:
 - **From:** \`${currentDeploy.versionId}\` (deployed by ${currentDeploy.author})
 - **To:** \`${targetVersionId}\`
 - **Recovery:** ${allRecovered ? 'All services recovered' : 'Partial recovery'}
-
+${revertPrSection}
 ### Investigation Evidence
 ${report.evidence.slice(-5).map(e => `- **${e.action}:** ${e.result}`).join('\n')}
 
