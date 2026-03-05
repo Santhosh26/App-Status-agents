@@ -13,7 +13,9 @@
       "Bash(timeout 15 npx wrangler:*)",
       "Bash(rm:*)",
       "Bash(npx wrangler:*)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "Bash(gh run:*)",
+      "Bash(gh workflow:*)"
     ]
   }
 }
