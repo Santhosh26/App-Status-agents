@@ -58,6 +58,7 @@ export const dashboardHtml = `<!DOCTYPE html>
     .event-github_correlation { border-left-color: #8b949e; background: #161b22; }
     .event-github_issue_created { border-left-color: #3fb950; background: #0d2818; }
     .event-github_revert_pr { border-left-color: #a371f7; background: #1a0d2e; }
+    .event-recovery { border-left-color: #3fb950; background: #0d2818; }
     .insight-item { font-size: 12px; padding: 6px 0; border-bottom: 1px solid #21262d; }
     .insight-item:last-child { border-bottom: none; }
     .empty { color: #484f58; font-size: 12px; font-style: italic; }
@@ -264,6 +265,9 @@ export const dashboardHtml = `<!DOCTYPE html>
         case 'github_issue_created':
           return '<br>&nbsp;&nbsp;<span style="color:#3fb950">GitHub Issue #' + (d.number || '?') + ' created</span>' +
             (d.url ? ' — <a href="' + d.url + '" target="_blank" style="color:#58a6ff">' + d.url + '</a>' : '');
+        case 'recovery':
+          return '<br>&nbsp;&nbsp;<span style="color:#3fb950">Recovered: </span>' +
+            (d.endpoints || []).map(function(ep) { return ENDPOINT_NAMES[ep] || ep; }).join(', ');
         case 'init':
           return d.message || 'Initialized';
         default:

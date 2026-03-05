@@ -97,6 +97,7 @@ export interface StatusAgentState {
   activeIncidentId: number | null;
   lastCheckAt: string | null;
   currentDeployment: DeployInfo | null;
+  knownDownEndpoints: string[];
 }
 
 export type WSEventType =
@@ -115,7 +116,8 @@ export type WSEventType =
   | 'notification_complete'
   | 'github_correlation'
   | 'github_issue_created'
-  | 'github_revert_pr';
+  | 'github_revert_pr'
+  | 'recovery';
 
 export interface WSEvent {
   type: WSEventType;

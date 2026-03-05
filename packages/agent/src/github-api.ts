@@ -252,3 +252,31 @@ export async function createIncidentIssue(
     url: data.html_url,
   };
 }
+
+export async function closeIssue(
+  env: Env,
+  issueNumber: number,
+  comment?: string
+): Promise<boolean> {
+  if (comment) {
+    await fetch(`${repoPath(env)}/issues/${issueNumber}/comments`, {
+      method: 'POST',
+      headers: headers(env),
+      body: JSON.stringify({ body: comment }),
+    });
+  }
+
+  const res = await fetch(`${repoPath(env)}/issues/${issueNumber}`, {
+    method: 'PATCH',
+    headers: headers(env),
+    body: JSON.stringify({ state: 'closed', state_reason: 'completed' }),
+  });
+
+  if (!res.ok) {
+    console.log(JSON.stringify({ phase: 'github-api', event: 'close_issue_error', status: res.status, issueNumber }));
+    return false;
+  }
+
+  console.log(JSON.stringify({ phase: 'github-api', event: 'issue_closed', number: issueNumber }));
+  return true;
+}
